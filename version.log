@@ -1,0 +1,284 @@
+ 
+
+Warning: For large values R (>10^3), the simulation does not yield reliable results (particles leave the box due to decrease of numerical accuracy and sub-optimal 
+implementation of periodic boundaries). For R ~ 10^3 to 10^5, the version rlB_09_long should be used.
+
+
+Version rlB_10:
+
+- implemented "simulation" class that stores most of the former main() function, all the loops etc. --> main() is much cleaner now.
+
+
+
+
+Version rlB_09:
+
+-tracer.cpp:
+New tracer variable "epsilon" which is used for the "epsilon trick" at the boundaries (including R scaling, see below).
+Removed the "static constexpr epsilonL" from main() and tracer.cpp.
+
+Constructors: Tracers are created as non-engaged.
+
+"void tracer::collide(segment* seg, SimBox* simbox)":
+Added scaling of epsilon with R in order to decrease the probability to end up in an obstacle after periodic boundary "teleportation". 
+The addition of an epsilon to the angle before the "teleportation" leads to a movement along the circle of S=epsilon*R which can become large for large R -> tracer might end up in obstacle after "teleportation". The implemented scaling iteratively reduces the epsilon until the particle does no longer end up in an obstacle after "teleportation" or until the minimum allowed epsilon has been reached.
+CARE: If R keeps increasing, S can become larger than the obstacle size or even the entire box. This can lead to particles leaving the box. 
+Put variable declarations into respective switch cases.
+ 
+
+-main.cpp:
+In collision loop, removed the distinction of which measurement point comes first (msd or velocity) and the entire case of both type of points happening simultaneously. These distinctions were only necessary in the original code version, where tracers were actually moved to the measurement points.
+New tracer variable "epsilon" is restored after particle collided with box boundaries.
+
+
+
+
+Version rlB_08:
+
+-fluid.cpp:
+Constructors: Instead of randomly choosing cyclotron origin from (-Lx/2-R, Lx/2+R) and (-Ly/2-R, Ly/2+R), directly choose tracer position randomly from within the box.
+Obtain gyration origin from position and phase angle. This prevents the need for the check whether the particle was even placed inside the box. The old method led to a fluid creation time that increased with R, as larger R led to a lower probability for the placed particle to be inside the box.
+
+
+
+
+Version rlB_07:
+
+-main.cpp: 
+Turned ">=" to ">" in if-structures for msd/acf switches.
+The if-structures that check whether there is a measurement point before the next collision now consider the timestampids of "msd.x" instead of "msd" 
+(in case one does not want to print out the msd's directly, but obtain them from msd.x and msd.y after the simulation --> saves a bit of execution time).
+
+
+-event.cpp:
+New event member "obstInd" denoting the index of the obstacle that is part of the event (initialized to -1 in constructors, also -1 for box boundaries).
+
+
+-tracer.cpp:
+
+"event tracer::find_nextcollision_single_simbox(SimBox* simulationbox)":
+The new event member "obstInd" is now set in this function.
+Improvement of proximity check: Now, only obstacles close to the circular trajectory are being considered.
+
+
+-obstacle.cpp:
+"void Obstacle::print(std::string iname)":
+Increased significant digits in the printout of the obstacle coordinates.
+
+
+
+
+Version rlB_06:
+
+-main.cpp:
+Bug for large R: The safe-move procedure that is supposed to free a particle after it has ended up in an obstacle leads to errors in case a particle has two successive collisions with the same box boundary (only possible for very large R and low densities). Particle would leave the box.
+--> Added if-structure to the case where a particle recollides with the same segment to take care of boundary recollisions.
+
+
+
+
+Version rlB_05:
+
+-main.cpp:
+Rewritten structure of main(...):
+--> put engaged check outside of life-time loop: an engaged particle will stay engaged forever (created routine tracer::is_engaged(...) for this purpose, see below).
+--> inserted measurement-switch system, given by booleans "msd_switch" and "acf_switch", that keeps code from entering if-structures for acquiring data points of acf's and msd's as soon as the next measurement point would be > lifetime (necessary to ensure that msd and V measurement vectors all have the same length, which is critical for t-averages).
+--> particles are no longer moved to points of measurements as this would alter their trajectory due to numerical fluctuations and the chaoticity of the system (e.g. number of measurement points would lead to different trajectories). For this, altered "getpos_unfolded()" and "getvelocity()" functions (see below), so that they would give the position/velocity the tracer would have after moving to these points - it is not actually moved there.
+
+In t-averaging for acf's, decreased the outer loop maximum index from acf.n to acf.n-1.
+Changed acf t-averaging so that not all points are taken as time origins. No. of points specified by variable "int dN".
+Changed time-axis for msd measurements: number of data points is fixed now, with first non-zero time point not being too small.
+After collision, changed "life+=nextevent.angle*singletracer->getr();" to "life += t;".
+Inserted printout of execution time using "high resolution clock" of "chrono" header.
+Added an epsilon (the same as in tracer.cpp, very important!) to the lifetime of a tracer after a collision with box boundary --> compensates "epsilon trick" implemented in tracer::collide(segment* seg, SimBox* simbox)".
+
+
+-tracer.cpp:
+Decreased "epsilonL" to 10^-9.
+
+Added "bool tracer::is_engaged(tracer input_tracer, double delta_angle, SimBox* simulationbox)" that checks wether a given particle is engaged. It can even distinguish between circular motions within the box and circular motions that cross the box boundaries which was not possible before (previoulsy, tracers that were trapped in localized circles were still considered "engaged" if they were crossing box boundaries).
+ 
+"void tracer::collide(segment* seg, SimBox* simbox)":
+Changed epsilon-movement of tracers upon collision with box boundaries. They are moved along their cirucular motion now (instead of adding the epsilon on their coordinates which would alter the trajectories).
+Implemented check wether a tracer is inside any (close) obstacle after colliding with box boundary. 
+There, proximity check is used based on new members of Obstacle class, sigma and center, see below.
+
+"event tracer::find_nextcollision_single_simbox(SimBox* simulationbox)":
+Implemented proximity check to see wether an obstacle is even close enough to be considered for collision calculations (drastically increase in runtime). Made use of new obstacle variables "center" and "sigma", see below.
+Due to new "is_engaged(...)" function and new structure of main(...), no need for checking "engaged" status here.
+
+"double  tracer::find_nextcollision_single_seg(segment seg)":
+Rewrote this function in numerical stable manner, using atan2() instead of acos() and using Vieta-like examination of quadratic equation.
+
+Implemented function "double tracer::signum(double x)", which is useful in "find_next_collision_single_seg(segment seg)".
+
+Added input double parameter "double help_angle" to functions "getpos()", "getpos_unfolded(SimBox* simulationbox)", and "getvelocity()". Default is set to 0. Returns respective values the tracer would have if it moved along "help_angle".
+
+
+-fluid.cpp:
+both constructors: In while loop head for the check wether tracers have been placed inside obstacles, changed "nObstacle" to "obstacle_list.size()" as the former does not consider obstacle images!
+
+
+-obstacle.cpp:
+Added members for effective obstacle radius "double sigma" (given by the distance of the center of the obstacle to one of the outer corners) and the center coordinate "coordinate center". Also inserted corresponding functions "coordinate getCenter()", "void setCenter(double cx, double cy)", "double getSigma()", and "void setSigma(double insigma)".
+Adjusted constructors and "void manipulate(double dx, double dy, double dtheta)" accordingly.
+
+Removed overloading of "=" operator (not needed here!!).
+
+
+-simbox.cpp
+"SimBox::SimBox(std::string configfilename)":
+Ensured that new obstacle variables "center" and "sigma" are set correctly.
+
+Removed the three useless "static constexpr" at the beginning.
+
+
+
+
+Version rlB_04:
+
+-main.cpp:
+Added the output of the msd in x- and y- direction.
+
+-simbox.cpp:
+"SimBox::SimBox(std::string configfilename)":
+Changed the algorithm so that the box dimension equals the experimental dimensions. The obstacles are allowed to reach out of the box now (as in the experiment). Periodic boundaries are being used. Using the booleans left, right, top, bot, topright, botright, topleft, botleft, it is ensured that only the absolute minimum of obstacle images is created. The number of physical obstacles and the number of images are printed out.
+
+Constructors of non-experimental configurations:
+Some necessary images had not been considered (the ones belonging to obstacles that reach out of the corners). 
+Using the booleans left, right, top, bot, topright, botright, topleft, botleft, it is ensured that only the absolute minimum of obstacle images is created. The number of physical obstacles and the number of images are printed out.
+
+"void SimBox::print(std::string iname)":
+Changed loop condition to "i<obstacle_list.size()" to include the image obstacles.
+
+
+
+
+Version rlB_03:
+
+-main.cpp:
+Implemented time interval averages for acf's. E.g., instead of merely calculating v_i(0)*v_j(t_k) for all t_k and then averaging over all the tracers, we take the average of v_i(t_0)*v_j(t_0 + t_k) w.r.t to t_0 for all t_k, and afterwards we average over tracers. This prolongs the runtime since one has to save the velocities and positions of the tracer during the calculation of its trajectory.
+
+
+
+Version rlB_02:
+
+-main.cpp:
+moved "event nextevent" definition outside the while loop.
+
+
+-measurement.cpp:
+print- and fileprint functions: 
+removed the "if(values.at(n-1)!=0)" structure since that element is always 0 (c.f. main()). 
+
+turned "i<n-1" in the for loop into "i<n-2", since the penultimate element of "values" is not filled by all tracers (c.f. main()).
+corresponding change in derivative- and log-derivative-fileprint functions.
+
+
+-simbox.cpp: 
+change in constructors 
+"SimBox::SimBox(double iLx,double iLy,int inObstacles,double iwObstacle,double ilObstacle, int randomseed)"
+and
+"SimBox::SimBox(double iLx,double iLy,int inObstacles,double iwObstacle,double ilObstacle)":
+rewrote the while loop for the obstacle placing, because previously all images of an obstacle had been counted as separate physical objects (would mess with density). 
+Moreoever, the new routine makes sure that only those obstacles receive images due to periodic boundaries where it is really necessary (previously, due to the wrong choice of "hilfe" variable, it was possible to miss a few of those obstacles or to create images of obstacles where it was not even necessary). 
+
+SimBox::SimBox(std::string configfilename): 
+added initialization of the for-loop counting variable.
+
+
+-fluid.cpp:
+"Fluid::Fluid(int intracers, SimBox* simulationbox)":
+added the counter of the placement trials "nrtrials" and the corresponding "cout" statement at the end.
+added the check wether a placed particle is inside the simbox (as in the other constructor of fluid)- then, a "inside=true" statement has to be added inside the loop (as in the other constructor).
+turned "-gyrius" in the upper bounds of "disx" and "disy" to "+gyrius" (as in the other constructor). 
+
+both constructors: moved the declaration of "int obstid" and "bool found" outside the loops.
+
+
+-segment.cpp:
+"void segment::set(coordinates)":
+added "re.set(ire);".
+
+
+-tracer.cpp:
+"bool tracer::isinside_experimental(Obstacle iobstacle)":
+in the if-structures, rewrote the "c"-terms with respect to "a". 
+Same with the other isinside-function.
+
+"double  tracer::find_nextcollision_single_seg(segment seg)":
+finite B: simplified if-structures at the end.
+
+
+
+Version rlB_01:
+
+-main.cpp:
+added measurement objects "acf_xx" (and so on) for measurements of autocorrelation functions. Since they do not follow  the same timeline as msd measurements, additional if-structures had to be included to make sure that the particle, in the case where the next collision would happen after the next measurement of msd or acf, is only transferred to that measurement time point that comes earlier (msd or acf).
+
+
+-measurement.cpp:
+all fileprint functions:
+inserted .close() command after printing to file (more secure).
+
+logderivativefileprint functions removed (not really needed here)
+
+
+-segment.cpp:
+Removed getangle() function.
+
+
+
+Version 3.08:
+
+- tracers would (physically) collide two times with the same segment; this was not considered in the case of 3.07, which is a catastrophe specially for the small gyr rad that makes these sort of collisions very frequent. solution is as follows:
+  if the next collision is not with the same segment then the program follows as before with a move and a collision to find the new velocity;
+  if the next collision is with the same segment then we make a "safe-move". it moves the particle and returns
+      true if the direction of the velocity with respect to the segment changes before and after the move. in this case it is a real event of collison and hence new velocities are calculated,
+      false if the direction of the velocity has not changed. in this case it is only a small move towards taking the tracer out of the obstacle.
+
+- when a measurement is done, meaning that the particle is between the collisions, the lastevent segment is set to null pointer so that when the nextcollision is found and it is before the next measurement time, it is executed.
+
+
+
+
+Version 3.07:
+
+- experimental data is ordered differently than I thought and implemented in 3.02. removed experimental read-in of obstacles.
+
+
+
+
+Version 3.05: 
+
+- bug in fluid.cpp where the particles are set initially. positions are set incorrectly from [-Lx/2-gyradius, Lx/2-gyradius]; one of them should be +gyraius. anyways, this is not a very nice way of setting the particles in the box, because if the gyradius is larger than half the box then it would not work. Here in this version we do something differently. The center of gyration is set in the interval [-Lx/2-gyradius,Lx/2+gyradius] and only particles which have getpos in the [-Lx/2,Lx/2] are accepted.
+
+
+
+
+Version 3.04:
+
+- b, the base of the measurement (a*b^n) extended to values smaller than 2
+
+
+
+
+Version 3.03:
+
+- reads the obstacle configuration from an input file (e.g. experimental data)
+
+
+
+
+Version 3.02:
+
+- writes a tracer trajectory 
+
+
+
+
+Version 3.01:
+
+- main change is related to how to handle passing a segment segment; here, if the next collision is with the same segment as the last collision then velocities are not changed. be aware that this change in the algorithm can not handle problems with open objects or individual line segments. such a system should be solved by checking explicitly if you have passed a line and if so you should be brought back to the allowed side of the segment by introducing backward motion of size epsilon. That is versio 2.09.
+
+- the obstacles are allowed to be close to the boundaries. If they are close an image of them would be added to the list of obstacles. This is definitly going to mess up with the real number of obstacles for calculation of density
